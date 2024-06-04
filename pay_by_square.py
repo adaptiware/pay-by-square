@@ -1,13 +1,13 @@
 import lzma
 import binascii
-from typing import Optional
+from typing import Optional, List, Union
 from datetime import datetime, date
 
 
 def generate(
     *,
     amount: float,
-    iban: str,
+    iban: Union[str, List[Union[str, List[str]]]],
     swift: str = '',
     date: Optional[date] = None,
     beneficiary_name: str = '',
@@ -19,39 +19,71 @@ def generate(
     beneficiary_address_1: str = '',
     beneficiary_address_2: str = '',
 ) -> str:
-    '''Generate pay-by-square code that can by used to create QR code for
-    banking apps
+    '''Generate pay-by-square code that can be used to create a QR code for
+    banking apps.
 
-    When date is not provided current date will be used.
+    If the date is not provided, the current date will be used.
+
+    The 'iban' parameter can be provided in the following formats:
+    1. A single string representing an IBAN.
+    2. A list of strings, each representing an IBAN.
+    3. A list of lists, where each sublist contains an IBAN and an optional SWIFT code.
+
+    Note: If you provide the 'iban' parameter as a list, the SWIFT codes will be handled
+    separately from the 'swift' parameter, which will then be ignored.
+    The maximum number of IBANs allowed is 5.
     '''
 
     if date is None:
         date = datetime.now()
 
+    # Handle single IBAN or list of IBANs
+    ibans_list = []
+    if isinstance(iban, list):
+        if len(iban) > 5:
+            raise ValueError("A maximum of 5 IBANs are allowed.")
+        for entry in iban:
+            if isinstance(entry, list):
+                ibans_list.append((entry[0], entry[1] if len(entry) > 1 else ''))
+            elif isinstance(entry, str):
+                ibans_list.append((entry, ''))
+            else:
+                raise ValueError("Invalid IBAN entry format.")
+        num_accounts = len(ibans_list)
+    else:
+        ibans_list.append((iban, swift))
+        num_accounts = 1
+
     # 1) create the basic data structure
-    data = '\t'.join(
-        [
-            '',
-            '1',  # payment
-            '1',  # simple payment
-            f'{amount:.2f}',
-            currency,
-            date.strftime('%Y%m%d'),
-            variable_symbol,
-            constant_symbol,
-            specific_symbol,
-            '',  # previous 3 entries in SEPA format, empty because already provided above
-            note,
-            '1',  # to an account
-            iban,
-            swift,
-            '0',  # not recurring
-            '0',  # not 'inkaso'
-            beneficiary_name,
-            beneficiary_address_1,
-            beneficiary_address_2,
-        ]
-    )
+    data_parts = [
+        '',
+        '1',  # payment
+        '1',  # simple payment
+        f'{amount:.2f}',
+        currency,
+        date.strftime('%Y%m%d'),
+        variable_symbol,
+        constant_symbol,
+        specific_symbol,
+        '',  # previous 3 entries in SEPA format, empty because already provided above
+        note,
+        str(num_accounts),  # number of accounts
+    ]
+
+    # Add IBANs and SWIFT pairs
+    for iban, swift in ibans_list:
+        data_parts.append(iban)
+        data_parts.append(swift)
+
+    data_parts.extend([
+        '0',  # not recurring
+        '0',  # not 'inkaso'
+        beneficiary_name,
+        beneficiary_address_1,
+        beneficiary_address_2,
+    ])
+
+    data = '\t'.join(data_parts)
 
     # 2) Add a crc32 checksum
     checksum = binascii.crc32(data.encode()).to_bytes(4, 'little')
